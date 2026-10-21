@@ -27,7 +27,7 @@ permissions:
   contents: write
 
 env:
-  APP_NAME: HanjuMac
+  APP_NAME: 韩小圈
 
 jobs:
   android:
@@ -35,11 +35,11 @@ jobs:
     name: Android APK
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v4
         with:
           distribution: zulu
           java-version: "17"
@@ -52,6 +52,9 @@ jobs:
 
       - name: 版本号
         run: bash tool/ci_version.sh android
+
+      - name: 拉依赖
+        run: flutter pub get
 
       - name: 构建 APK
         run: flutter build apk --release --split-per-abi --dart-define-from-file=ci_build.json --no-pub
@@ -66,7 +69,7 @@ jobs:
           done
           ls -lh dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: dist/*.apk
@@ -77,7 +80,7 @@ jobs:
     name: macOS DMG
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -90,22 +93,41 @@ jobs:
       - name: 版本号
         run: bash tool/ci_version.sh macos
 
+      - name: 拉依赖
+        run: |
+          flutter config --no-enable-swift-package-manager
+          flutter pub get
+
       - name: 构建 macOS
         run: flutter build macos --release --dart-define-from-file=ci_build.json --no-pub
 
+      - name: 定位 .app
+        id: app
+        shell: bash
+        run: |
+          APP=$(find build/macos/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
+          echo "path=$APP" >> "$GITHUB_OUTPUT"
+          echo "APP=$APP"
+          du -sh "$APP"
+
       - name: 打包 DMG
+        shell: bash
         run: |
           mkdir -p dist
-          npm install --global create-dmg
-          create-dmg --volname "韩小圈" --volicon "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png" --window-size 660 400 --icon-size 128 --app-drop-link 500 200 "dist/HanjuTV_macos_${VERSION}.dmg" "build/macos/Build/Products/Release/HanjuMac.app" || true
+          npm install --global create-dmg || true
+          create-dmg --volname "韩小圈" \
+            --volicon "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png" \
+            --window-size 660 400 --icon-size 128 --app-drop-link 500 200 \
+            "dist/HanjuTV_macos_${VERSION}.dmg" "${{ steps.app.outputs.path }}" || true
           ls -lh dist
 
       - name: 打包 ZIP
+        shell: bash
         run: |
-          ditto -c -k --sequesterRsrc --keepParent build/macos/Build/Products/Release/HanjuMac.app "dist/HanjuTV_macos_${VERSION}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "${{ steps.app.outputs.path }}" "dist/HanjuTV_macos_${VERSION}.zip"
           ls -lh dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
           path: |
@@ -118,7 +140,7 @@ jobs:
     name: iOS IPA（无签名）
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -131,17 +153,24 @@ jobs:
       - name: 版本号
         run: bash tool/ci_version.sh ios
 
+      - name: 拉依赖
+        run: |
+          flutter config --no-enable-swift-package-manager
+          flutter pub get
+
       - name: 构建 iOS
         run: flutter build ios --release --no-codesign --dart-define-from-file=ci_build.json --no-pub
 
       - name: 打包 IPA
+        shell: bash
         run: |
           mkdir -p dist Payload
           cp -R build/ios/iphoneos/Runner.app Payload/
           zip -qry "dist/HanjuTV_ios_${VERSION}_unsigned.ipa" Payload
+          rm -rf Payload
           ls -lh dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: ios-ipa
           path: dist/*.ipa
@@ -153,18 +182,23 @@ jobs:
     if: ${{ always() && (github.event_name == 'push' || github.event.inputs.tag != '') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           path: artifacts
 
       - name: 整理产物
+        shell: bash
         run: |
           mkdir -p dist
-          find artifacts -type f \( -name '*.apk' -o -name '*.dmg' -o -name '*.zip' -o -name '*.ipa' \) -exec cp {} dist/ \;
-          ls -lh dist
+          if [ -d artifacts ]; then
+            find artifacts -type f \( -name '*.apk' -o -name '*.dmg' -o -name '*.zip' -o -name '*.ipa' \) -exec cp {} dist/ \;
+          fi
+          ls -lh dist || true
+          test "$(ls -A dist | wc -l)" -gt 0
 
       - name: 创建 Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
           name: 韩小圈 ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
