@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:PiliPlus/hanju/models.dart';
+import 'package:PiliPlus/hanju/parallel_http.dart';
 import 'package:PiliPlus/hanju/segment_auth.dart';
 
 class HjApiError implements Exception {
@@ -75,17 +76,12 @@ class HjApi {
     return res;
   }
 
-  /// 拉 master m3u8 原始文本（必须带分片签名，否则被 CDN 限速到 ~1KB/s）
+  /// 拉 master m3u8 原始文本。
+  /// CDN 对单连接限速 ~850 B/s（42 KB 清单要 42 秒），所以清单也走并发分段拉。
   Future<String> fetchPlaylist(String dir) async {
     final uri = Uri.parse('$hjCdnHost/m3u8/$dir.m3u8?$hjSegmentAuth');
-    final req = await _http.getUrl(uri);
-    req.headers.set('User-Agent', _ua);
-    final resp = await req.close();
-    final body = await resp.transform(utf8.decoder).join();
-    if (resp.statusCode != 200) {
-      throw HjApiError('播放源 HTTP ${resp.statusCode}');
-    }
-    return body;
+    final bytes = await HjParallel.fetch(uri);
+    return utf8.decode(bytes, allowMalformed: true);
   }
 
   /// 图片带时效签名，只能下载 detail 里给出的新 URL
