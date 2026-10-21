@@ -175,14 +175,44 @@ jobs:
         run: bash tool/ci_patch.sh ios
 
       - name: 生成 Xcode 工程
-        run: flutter build ios --release --config-only --dart-define-from-file=ci_build.json --no-pub
+        shell: bash
+        env:
+          CODE_SIGNING_ALLOWED: "NO"
+          CODE_SIGNING_REQUIRED: "NO"
+          CODE_SIGN_IDENTITY: ""
+          EXPANDED_CODE_SIGN_IDENTITY: ""
+        run: |
+          # Flutter 3.47 的 --config-only 也会做一次证书探测；失败不影响配置生成
+          flutter build ios --release --config-only --no-codesign \
+            --dart-define-from-file=ci_build.json --no-pub || true
+          test -f ios/Flutter/Generated.xcconfig || { echo "缺少 Generated.xcconfig"; exit 1; }
+          echo "Generated.xcconfig OK"
+          grep -E 'FLUTTER_ROOT|FLUTTER_APPLICATION_PATH' ios/Flutter/Generated.xcconfig | head -3
 
       - name: 构建 iOS（关闭签名）
         shell: bash
+        env:
+          CODE_SIGNING_ALLOWED: "NO"
+          CODE_SIGNING_REQUIRED: "NO"
+          CODE_SIGN_IDENTITY: ""
+          EXPANDED_CODE_SIGN_IDENTITY: ""
         run: |
           set -o pipefail
           cd ios
-          xcodebuild             -workspace Runner.xcworkspace             -scheme Runner             -configuration Release             -sdk iphoneos             -destination 'generic/platform=iOS'             -archivePath ../build/ios/Runner.xcarchive             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=""             CODE_SIGN_ENTITLEMENTS=""             DEVELOPMENT_TEAM=""             PROVISIONING_PROFILE_SPECIFIER=""             archive
+          xcodebuild \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath ../build/ios/Runner.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            archive
 
       - name: 打包 IPA
         shell: bash
