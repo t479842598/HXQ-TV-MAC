@@ -56,6 +56,10 @@ jobs:
       - name: 拉依赖
         run: flutter pub get
 
+      - name: 打 SDK / 包补丁
+        shell: bash
+        run: bash tool/ci_patch.sh android
+
       - name: 构建 APK
         run: flutter build apk --release --split-per-abi --dart-define-from-file=ci_build.json --no-pub
 
@@ -96,7 +100,12 @@ jobs:
       - name: 拉依赖
         run: |
           flutter config --no-enable-swift-package-manager
+          flutter config --enable-macos-arm64-only
           flutter pub get
+
+      - name: 打 SDK / 包补丁
+        shell: bash
+        run: bash tool/ci_patch.sh macos
 
       - name: 构建 macOS
         run: flutter build macos --release --dart-define-from-file=ci_build.json --no-pub
@@ -157,6 +166,10 @@ jobs:
         run: |
           flutter config --no-enable-swift-package-manager
           flutter pub get
+
+      - name: 打 SDK / 包补丁
+        shell: bash
+        run: bash tool/ci_patch.sh ios
 
       - name: 构建 iOS
         run: flutter build ios --release --no-codesign --dart-define-from-file=ci_build.json --no-pub
