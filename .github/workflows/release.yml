@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_android:
+        description: "构建 Android APK"
+        type: boolean
+        default: true
+      build_macos:
+        description: "构建 macOS DMG"
+        type: boolean
+        default: true
+      build_ios:
+        description: "构建 iOS IPA（无签名）"
+        type: boolean
+        default: true
+      tag:
+        description: "发布 tag（留空只出构建产物，不建 Release）"
+        type: string
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME: HanjuMac
+
+jobs:
+  android:
+    if: ${{ github.event_name == 'push' || github.event.inputs.build_android == 'true' }}
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: 版本号
+        run: bash tool/ci_version.sh android
+
+      - name: 构建 APK
+        run: flutter build apk --release --split-per-abi --dart-define-from-file=ci_build.json --no-pub
+
+      - name: 整理产物
+        shell: bash
+        run: |
+          mkdir -p dist
+          for f in build/app/outputs/flutter-apk/app-*-release.apk; do
+            abi=$(echo "$f" | sed -E 's|.*app-(.*)-release\.apk|\1|')
+            cp "$f" "dist/HanjuTV_android_${VERSION}_${abi}.apk"
+          done
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+
+  macos:
+    if: ${{ github.event_name == 'push' || github.event.inputs.build_macos == 'true' }}
+    name: macOS DMG
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: 版本号
+        run: bash tool/ci_version.sh macos
+
+      - name: 构建 macOS
+        run: flutter build macos --release --dart-define-from-file=ci_build.json --no-pub
+
+      - name: 打包 DMG
+        run: |
+          mkdir -p dist
+          npm install --global create-dmg
+          create-dmg --volname "韩小圈" --volicon "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png" --window-size 660 400 --icon-size 128 --app-drop-link 500 200 "dist/HanjuTV_macos_${VERSION}.dmg" "build/macos/Build/Products/Release/HanjuMac.app" || true
+          ls -lh dist
+
+      - name: 打包 ZIP
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/macos/Build/Products/Release/HanjuMac.app "dist/HanjuTV_macos_${VERSION}.zip"
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-dmg
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+  ios:
+    if: ${{ github.event_name == 'push' || github.event.inputs.build_ios == 'true' }}
+    name: iOS IPA（无签名）
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: 版本号
+        run: bash tool/ci_version.sh ios
+
+      - name: 构建 iOS
+        run: flutter build ios --release --no-codesign --dart-define-from-file=ci_build.json --no-pub
+
+      - name: 打包 IPA
+        run: |
+          mkdir -p dist Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry "dist/HanjuTV_ios_${VERSION}_unsigned.ipa" Payload
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-ipa
+          path: dist/*.ipa
+          if-no-files-found: error
+
+  release:
+    name: 发布正式版
+    needs: [android, macos, ios]
+    if: ${{ always() && (github.event_name == 'push' || github.event.inputs.tag != '') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+
+      - name: 整理产物
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.apk' -o -name '*.dmg' -o -name '*.zip' -o -name '*.ipa' \) -exec cp {} dist/ \;
+          ls -lh dist
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+          name: 韩小圈 ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+          body: |
+            韩小圈客户端构建产物。
+
+            - **Android**：`HanjuTV_android_*_<abi>.apk`（arm64-v8a / armeabi-v7a / x86_64 三包，debug 签名，可直接侧载）
+            - **macOS**：`HanjuTV_macos_*.dmg` 与 `.zip`（未签名，首次打开需右键 →「打开」）
+            - **iOS**：`HanjuTV_ios_*_unsigned.ipa`（未签名，需自签工具如 Sideloadly / AltStore 安装）
+          files: dist/*
+          draft: false
+          prerelease: false
