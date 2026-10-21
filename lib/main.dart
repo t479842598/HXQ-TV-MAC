@@ -7,6 +7,7 @@ import 'package:PiliPlus/common/widgets/custom_toast.dart';
 import 'package:PiliPlus/common/widgets/route_aware_mixin.dart';
 import 'package:PiliPlus/common/widgets/scale_app.dart';
 import 'package:PiliPlus/common/widgets/scroll_behavior.dart';
+import 'package:PiliPlus/hanju/selftest.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/theme/theme_color_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
@@ -95,6 +96,10 @@ void main() async {
   ScaledWidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await _initAppPath();
+  if (Platform.environment['HJ_SELFTEST'] == '1') {
+    await runPlaybackSelfTest();
+    return;
+  }
   try {
     await GStorage.init();
   } catch (e) {
