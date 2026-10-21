@@ -122,12 +122,15 @@ jobs:
       - name: 打包 DMG
         shell: bash
         run: |
+          set -o pipefail
           mkdir -p dist
-          npm install --global create-dmg || true
-          create-dmg --volname "韩小圈" \
-            --volicon "macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png" \
-            --window-size 660 400 --icon-size 128 --app-drop-link 500 200 \
-            "dist/HanjuTV_macos_${VERSION}.dmg" "${{ steps.app.outputs.path }}" || true
+          APP="${{ steps.app.outputs.path }}"
+          DMG="dist/HanjuTV_macos_${VERSION}.dmg"
+          STAGE="$(mktemp -d)"
+          cp -R "$APP" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "韩小圈" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          rm -rf "$STAGE"
           ls -lh dist
 
       - name: 打包 ZIP
