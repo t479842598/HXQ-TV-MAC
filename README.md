@@ -28,6 +28,22 @@
 - **响应式**：手机 3 列 / 平板 5 列 / TV 6 列 / 桌面按窗口宽度自适应 4–12 列
 - **TV 遥控**：所有可点元素支持方向键焦点 + hover 高亮
 
+## 直接下载
+
+正式版发布在 [Releases](https://github.com/t479842598/HXQ-TV-MAC/releases)：
+
+| 平台 | 文件 | 说明 |
+| --- | --- | --- |
+| macOS | `HanjuTV_macos_1.0.0.dmg` / `.zip` | Apple Silicon（arm64），拖进 Applications 即可 |
+| Android | `HanjuTV_android_1.0.0_arm64-v8a.apk` | 绝大多数手机；另附 armeabi-v7a / x86_64 |
+| iOS | `HanjuTV_ios_1.0.0_unsigned.ipa` | 未签名，需自签（Sideloadly / AltStore / Xcode）后安装 |
+
+macOS 首次打开若提示“无法验证开发者”，执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/韩小圈.app
+```
+
 ## 一键构建
 
 ### macOS
@@ -50,8 +66,19 @@ flutter build apk --release --split-per-abi
 
 ### iOS（无签名）
 
+Flutter 3.47 起 `--no-codesign` 仍会探测 Development Team，CI 里改用 `--config-only` + 直接调 xcodebuild：
+
 ```bash
-flutter build ios --release --no-codesign
+flutter build ios --release --config-only --no-codesign --no-pub
+cd ios && xcodebuild \
+  -workspace Runner.xcworkspace -scheme Runner \
+  -configuration Release -sdk iphoneos \
+  -destination 'generic/platform=iOS' \
+  -archivePath ../build/ios/Runner.xcarchive \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+  PROVISIONING_PROFILE_SPECIFIER="" archive
+# 产物：build/ios/Runner.xcarchive/Products/Applications/Runner.app
 ```
 
 ### Windows
