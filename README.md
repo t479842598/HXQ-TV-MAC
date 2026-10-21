@@ -34,9 +34,9 @@
 
 | 平台 | 文件 | 说明 |
 | --- | --- | --- |
-| macOS | `HanjuTV_macos_1.0.0.dmg` / `.zip` | Apple Silicon（arm64），拖进 Applications 即可 |
-| Android | `HanjuTV_android_1.0.0_arm64-v8a.apk` | 绝大多数手机；另附 armeabi-v7a / x86_64 |
-| iOS | `HanjuTV_ios_1.0.0_unsigned.ipa` | 未签名，需自签（Sideloadly / AltStore / Xcode）后安装 |
+| macOS | `HanjuTV_macos_1.0.2.dmg` / `.zip` | Apple Silicon（arm64），拖进 Applications 即可 |
+| Android | `HanjuTV_android_1.0.2_arm64-v8a.apk` | 绝大多数手机；另附 armeabi-v7a / x86_64 |
+| iOS | `HanjuTV_ios_1.0.2_unsigned.ipa` | 未签名，需自签（Sideloadly / AltStore / Xcode）后安装 |
 
 macOS 首次打开若提示“无法验证开发者”，执行：
 
@@ -98,7 +98,7 @@ flutter build windows --release
 版本号由 `tool/ci_version.sh` 从 `pubspec.yaml` 读取，构建号用 `git rev-list --count HEAD`。
 
 ```bash
-git tag v1.0.0 && git push origin v1.0.0   # 自动跑全部平台并建 Release
+git tag v1.0.2 && git push origin v1.0.2   # 自动跑全部平台并建 Release
 ```
 
 ## 目录结构
