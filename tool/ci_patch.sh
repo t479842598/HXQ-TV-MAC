@@ -12,12 +12,25 @@ log() { echo "[patch] $*"; }
 apply_patch() {
   local dir="$1" file="$2"
   local out
+  # 1) 正常应用
   if out=$(cd "$dir" && git apply -p1 "$file" 2>&1); then
     log "OK   $file"
     return 0
   fi
-  if out=$(cd "$dir" && patch -p1 --forward --silent < "$file" 2>&1); then
+  # 2) 已经打过（CI 缓存了打过补丁的 SDK / 重复执行）→ 视为成功
+  if (cd "$dir" && git apply -p1 --reverse --check "$file" >/dev/null 2>&1); then
+    log "OK=  $file (已应用，跳过)"
+    return 0
+  fi
+  # 3) 回退 patch 命令
+  out=$(cd "$dir" && patch -p1 --forward --silent < "$file" 2>&1)
+  local rc=$?
+  if [ $rc -eq 0 ]; then
     log "OK*  $file (patch -p1)"
+    return 0
+  fi
+  if echo "$out" | grep -qi 'previously applied\|Reversed (or previously applied)'; then
+    log "OK=  $file (已应用，跳过)"
     return 0
   fi
   log "FAIL $file :: $out"
