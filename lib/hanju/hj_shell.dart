@@ -5,6 +5,7 @@ import 'package:PiliPlus/hanju/pages/detail_page.dart';
 import 'package:PiliPlus/hanju/pages/history_page.dart';
 import 'package:PiliPlus/hanju/pages/home_page.dart';
 import 'package:PiliPlus/hanju/pages/player_page.dart';
+import 'package:PiliPlus/hanju/pages/search_page.dart';
 import 'package:PiliPlus/hanju/store.dart';
 import 'package:PiliPlus/hanju/ui/hj_theme.dart';
 import 'package:PiliPlus/hanju/ui/responsive.dart';
@@ -97,6 +98,7 @@ class _HjShellState extends State<HjShell> {
 
   static const _tabs = <(String, IconData, IconData)>[
     ('首页', Icons.home_outlined, Icons.home_rounded),
+    ('搜索', Icons.search_outlined, Icons.search_rounded),
     ('分类', Icons.grid_view_outlined, Icons.grid_view_rounded),
     ('记录', Icons.history_outlined, Icons.history_rounded),
   ];
@@ -108,7 +110,8 @@ class _HjShellState extends State<HjShell> {
 
     final body = switch (_tab) {
       0 => HjHomePage(onOpen: _openSeries),
-      1 => HjCategoryPage(onOpen: _openSeries),
+      1 => HjSearchPage(onOpen: _openSeries),
+      2 => HjCategoryPage(onOpen: _openSeries),
       _ => HjHistoryPage(onResume: _resume),
     };
 

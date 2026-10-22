@@ -12,14 +12,39 @@ class HjParallel {
   HjParallel._();
 
   static const String defaultUa = 'tdc.8360';
-  static const int _maxConcurrency = 300;
+
+  /// 总并发上限。默认 300（实测 CDN 在 400 以上开始 reset）。
+  /// 体检脚本多进程并行时用 HJ_MAXCONC 下调，避免多进程叠加超过阈值。
+  static final int _maxConcurrency = _readMaxConc();
+
+  static int _readMaxConc() {
+    final raw = Platform.environment['HJ_MAXCONC'];
+    final n = raw == null ? 0 : (int.tryParse(raw) ?? 0);
+    if (n >= 8 && n <= 300) return n;
+    return 300;
+  }
+
   static const int _minChunk = 1024;
 
-  static final HttpClient _client = HttpClient()
+  static HttpClient _client = _newClient();
+
+  static HttpClient _newClient() => HttpClient()
     ..maxConnectionsPerHost = _maxConcurrency
     ..idleTimeout = const Duration(seconds: 20)
     ..connectionTimeout = const Duration(seconds: 12)
     ..autoUncompress = false;
+
+  /// 丢弃连接池。
+  ///
+  /// CDN 侧会在响应结束后很快回收连接，池里残留的 300 条死连接会被下一次
+  /// 复用尝试命中，触发 connect 失败 → 重试，表现为「换源后首帧从 15s 变成
+  /// 45s+」。换源前调一次即可，代价只是重建客户端对象。
+  static void reset() {
+    try {
+      _client.close(force: true);
+    } catch (_) {}
+    _client = _newClient();
+  }
 
   static int concurrencyFor(int bytes) {
     final n = (bytes / _minChunk).floor();
@@ -77,6 +102,37 @@ class HjParallel {
     throw HjFetchError('分段 $start-$end 失败: $last');
   }
 
+  /// 边下边吐：按顺序把分好的段一段段交出去，**第一段到就立刻可用**。
+  ///
+  /// 关键：本地代理必须流式转发。整段下完再吐会让 ffmpeg 等超过
+  /// keepalive 超时（实测 `hls: keepalive request failed ... Operation timed out`），
+  /// 表现为「一直转圈、位置在走但一帧都不出」。
+  static Future<HjStreamSource> open(
+    Uri url, {
+    String ua = defaultUa,
+    int? concurrency,
+  }) async {
+    final total = await contentLength(url, ua: ua);
+    if (total <= 0) throw const HjFetchError('无法获取资源长度');
+    final n = concurrency ?? concurrencyFor(total);
+    final chunk = (total / n).ceil();
+    final futures = <Future<_Chunk>>[];
+    for (var i = 0; i < n; i++) {
+      final s = i * chunk;
+      if (s >= total) break;
+      final e = (s + chunk - 1).clamp(0, total - 1);
+      futures.add(_range(url, s, e, ua));
+    }
+    Stream<Uint8List> ordered() async* {
+      for (final f in futures) {
+        final c = await f;
+        yield c.bytes;
+      }
+    }
+
+    return HjStreamSource(total, ordered());
+  }
+
   /// 整资源并发拉取，返回完整字节（顺序正确）。
   static Future<Uint8List> fetch(
     Uri url, {
@@ -113,6 +169,13 @@ class HjParallel {
     if (off != total) throw HjFetchError('长度不符: $off != $total');
     return out;
   }
+}
+
+/// 流式资源：`total` 是完整长度，`bytes` 按顺序吐出各段。
+class HjStreamSource {
+  const HjStreamSource(this.total, this.bytes);
+  final int total;
+  final Stream<Uint8List> bytes;
 }
 
 class _Chunk {

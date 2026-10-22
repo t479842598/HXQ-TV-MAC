@@ -7,7 +7,13 @@ import 'package:PiliPlus/common/widgets/custom_toast.dart';
 import 'package:PiliPlus/common/widgets/route_aware_mixin.dart';
 import 'package:PiliPlus/common/widgets/scale_app.dart';
 import 'package:PiliPlus/common/widgets/scroll_behavior.dart';
+import 'package:PiliPlus/hanju/audioscan.dart';
+import 'package:PiliPlus/hanju/aoprobe.dart';
+import 'package:PiliPlus/hanju/audiostress.dart';
 import 'package:PiliPlus/hanju/selftest.dart';
+import 'package:PiliPlus/hanju/codecprobe.dart';
+import 'package:PiliPlus/hanju/timing.dart';
+import 'package:PiliPlus/hanju/framecheck.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/theme/theme_color_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
@@ -96,6 +102,30 @@ void main() async {
   ScaledWidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await _initAppPath();
+  if (Platform.environment['HJ_FRAMESCAN'] == '1') {
+    await runFrameScan();
+    return;
+  }
+  if (Platform.environment['HJ_AOPROBE'] == '1') {
+    await runAoProbe();
+    return;
+  }
+  if (Platform.environment['HJ_AUDIOSTRESS'] == '1') {
+    await runAudioStress();
+    return;
+  }
+  if (Platform.environment['HJ_AUDIOSCAN'] == '1') {
+    await runAudioScan();
+    return;
+  }
+  if (Platform.environment['HJ_CODECPROBE'] == '1') {
+    await runCodecProbe();
+    return;
+  }
+  if (Platform.environment['HJ_TIMING'] == '1') {
+    await runTiming();
+    return;
+  }
   if (Platform.environment['HJ_SELFTEST'] == '1') {
     await runPlaybackSelfTest();
     return;

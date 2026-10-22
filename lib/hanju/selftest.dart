@@ -52,14 +52,23 @@ Future<void> runPlaybackSelfTest() async {
     player = await Player.create(
       configuration: const PlayerConfiguration(
         title: 'HanjuTV',
-        logLevel: MPVLogLevel.error,
+        logLevel: MPVLogLevel.warn,
       ),
     );
     final errSub = player.stream.error.listen((e) => w('MPV_ERROR $e'));
     final logSub = player.stream.log.listen((e) {
       final t = e.text.trim();
-      if (t.isNotEmpty) w('MPV_LOG $t');
+      if (t.isNotEmpty &&
+          (t.contains('ao') ||
+              t.contains('audio') ||
+              t.contains('Audio') ||
+              t.contains('device') ||
+              t.contains('codec'))) {
+        w('MPV_LOG $t');
+      }
     });
+    final audioSub =
+        player.stream.audioParams.listen((p) => w('AUDIO_PARAMS $p'));
     final t1 = DateTime.now();
     await player.open(Media(url.toString()), play: true);
 
@@ -82,12 +91,14 @@ Future<void> runPlaybackSelfTest() async {
     w('PLAY pos=${s.position.inSeconds}s dur=${s.duration.inSeconds}s '
         'size=${s.width}x${s.height} buffering=${s.buffering} '
         'stallSamples=$stalls elapsed=${el.toStringAsFixed(1)}s');
+    w('AUDIO state=${s.audioParams}');
     w(s.position.inSeconds >= 10
         ? 'RESULT PASS'
         : 'RESULT FAIL position too small');
 
     await errSub.cancel();
     await logSub.cancel();
+    await audioSub.cancel();
   } catch (e, st) {
     w('RESULT FAIL $e');
     w(st.toString());

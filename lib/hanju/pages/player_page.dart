@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 
 import 'package:PiliPlus/hanju/api.dart';
+import 'package:PiliPlus/hanju/audio_guard.dart';
 import 'package:PiliPlus/hanju/history.dart';
 import 'package:PiliPlus/hanju/models.dart';
 import 'package:PiliPlus/hanju/playlist_server.dart';
@@ -64,6 +65,10 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
   int _index = 0;
   bool _loading = true;
   String? _error;
+  bool _audioRecovering = false;
+  int _audioRecoverAttempts = 0;
+  Timer? _audioWatchdog;
+  String? _currentUrl;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -80,6 +85,17 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
   bool _showControls = true;
   Timer? _hideTimer;
   Timer? _historyTimer;
+
+  // 长按方向键：右键先计时 250ms 再进倍速，松开回到原速；
+  // 上下键按下先跳一格音量，再每 140ms 连续加减（对齐 PiliPlus player_focus 的手感）。
+  Timer? _speedHoldTimer;
+  Timer? _volHoldTimer;
+  bool _speedBoost = false;
+  double _rateBeforeBoost = 1.0;
+
+  /// 音量浮层：调音量时显示，停手 900ms 后隐藏
+  bool _volHudVisible = false;
+  Timer? _volHudTimer;
   bool _seeking = false;
   double _seekValue = 0;
   bool _panelOpen = false;
@@ -102,6 +118,10 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
   void dispose() {
     _hideTimer?.cancel();
     _historyTimer?.cancel();
+    _audioWatchdog?.cancel();
+    _speedHoldTimer?.cancel();
+    _volHoldTimer?.cancel();
+    _volHudTimer?.cancel();
     _history.removeListener(_onHistory);
     for (final s in _subs) {
       s.cancel();
@@ -147,7 +167,13 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
         if (v && mounted) _next();
       }));
       _subs.add(player.stream.error.listen((v) {
-        if (mounted) setState(() => _error = v);
+        if (!mounted) return;
+        // 音频输出故障不该让整页变成错误页：视频照常播，后台自愈。
+        if (HjAudioGuard.isAudioFailure(v)) {
+          unawaited(_recoverAudio());
+          return;
+        }
+        setState(() => _error = v);
       }));
       _subs.add(player.stream.videoParams.listen((v) {
         final h = v.h;
@@ -171,6 +197,57 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
         });
       }
     }
+  }
+
+  /// 音频自愈：不让 `Could not open/initialize audio device` 变成播放失败。
+  ///
+  /// mpv 在 ao 打不开时会直接丢掉音轨，只发 `ao-reload` 救不回来，
+  /// 必须重开媒体再 seek 回原位置 —— 见 [HjAudioGuard.recover] 的 reopen 回调。
+  Future<void> _recoverAudio() async {
+    final player = _player;
+    final url = _currentUrl;
+    if (player == null || url == null || _audioRecovering) return;
+    _audioRecovering = true;
+    _audioRecoverAttempts++;
+    try {
+      final at = _position;
+      final ok = await HjAudioGuard.recover(
+        player,
+        reopen: () async {
+          await player.open(Media(url), play: true);
+          if (at > const Duration(seconds: 1)) {
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+            await player.seek(at);
+          }
+          await player.setRate(_rate);
+          await player.setVolume(_volume);
+          if (_muted) await player.setVolume(0);
+        },
+      );
+      HjAudioGuard.note(
+        'recover attempt=$_audioRecoverAttempts ok=$ok '
+        'ep=${_episodeAt(_index)?.serialNo}',
+      );
+      if (!ok && mounted) {
+        // 三级恢复都没救回来：提示一次，但不锁死播放。
+        setState(() => _error = '音频设备打不开，可以继续看画面或点重试');
+      }
+    } finally {
+      _audioRecovering = false;
+    }
+  }
+
+  /// 起播后 3 秒体检一次：有视频没声音 → 直接自愈。
+  void _armAudioWatchdog() {
+    _audioWatchdog?.cancel();
+    _audioWatchdog = Timer(const Duration(seconds: 12), () {
+      final p = _player;
+      if (p == null || !mounted) return;
+      if (p.state.playing && !HjAudioGuard.hasAudio(p)) {
+        HjAudioGuard.note('watchdog no-audio ep=${_episodeAt(_index)?.serialNo}');
+        unawaited(_recoverAudio());
+      }
+    });
   }
 
   void _startHistoryTimer() {
@@ -238,12 +315,15 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
         if (ms != null && ms > 0) start = Duration(milliseconds: ms);
       }
       await player.setRate(_rate);
+      _audioRecoverAttempts = 0;
+      _currentUrl = url.toString();
       await player.open(Media(url.toString()), play: true);
       if (start > Duration.zero) {
         await Future<void>.delayed(const Duration(milliseconds: 400));
         await player.seek(start);
       }
       if (mounted) setState(() => _loading = false);
+      _armAudioWatchdog();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -252,6 +332,32 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
         });
       }
     }
+  }
+
+  /// 重试：先原地重载；连续失败则重建整个 Player（核心资源全换）。
+  Future<void> _retry() async {
+    setState(() {
+      _error = null;
+      _loading = true;
+    });
+    if (_audioRecoverAttempts < 2) {
+      await _load(_index, resume: false);
+      return;
+    }
+    await _rebuildPlayer();
+  }
+
+  Future<void> _rebuildPlayer() async {
+    final old = _player;
+    for (final s in _subs) {
+      await s.cancel();
+    }
+    _subs.clear();
+    _video = null;
+    _player = null;
+    _audioRecoverAttempts = 0;
+    if (old != null) unawaited(old.dispose());
+    await _boot();
   }
 
   void _prev() {
@@ -308,11 +414,9 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
-            if (_showControls) {
-              setState(() => _showControls = false);
-            } else {
-              _wake();
-            }
+            // 点画面 = 播放/暂停（PiliPlus 同款），同时把控制条亮出来。
+            _togglePlay();
+            _wake();
           },
           child: Stack(
             fit: StackFit.expand,
@@ -333,12 +437,117 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
                   child: CircularProgressIndicator(color: HjTheme.accent),
                 ),
               if (_error != null) _errorView(m),
+              if (_speedBoost) _speedHud(m),
+              _volumeHud(m),
               if (_showControls) ...[
                 _topBar(m, ep),
                 _bottomBar(m),
                 if (_panelOpen) _episodePanel(m),
               ],
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 长按右键的倍速角标
+  Widget _speedHud(HjMetrics m) {
+    return Positioned(
+      top: m.gap(18),
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: m.gap(14),
+              vertical: m.gap(7),
+            ),
+            decoration: BoxDecoration(
+              gradient: HjTheme.brand,
+              borderRadius: BorderRadius.circular(m.gap(16)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.fast_forward_rounded,
+                    size: m.sp(14), color: Colors.white),
+                SizedBox(width: m.gap(6)),
+                Text(
+                  '2X 倍速',
+                  style: TextStyle(
+                    fontSize: m.sp(12),
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 音量浮层：长按上下键时出现，停手 900ms 后淡出
+  Widget _volumeHud(HjMetrics m) {
+    if (!_volHudVisible) return const SizedBox.shrink();
+    final v = _volume.round();
+    return Positioned(
+      right: m.gap(24),
+      top: 0,
+      bottom: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: Container(
+            width: m.gap(38),
+            height: m.gap(190),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.62),
+              borderRadius: BorderRadius.circular(m.gap(19)),
+            ),
+            child: Column(
+              children: [
+                SizedBox(height: m.gap(10)),
+                Icon(
+                  _muted || v <= 0
+                      ? Icons.volume_off_rounded
+                      : (v >= 60
+                          ? Icons.volume_up_rounded
+                          : Icons.volume_down_rounded),
+                  size: m.sp(15),
+                  color: Colors.white70,
+                ),
+                SizedBox(height: m.gap(8)),
+                Expanded(
+                  child: RotatedBox(
+                    quarterTurns: 3,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(m.gap(4)),
+                      child: LinearProgressIndicator(
+                        value: v / 100,
+                        minHeight: m.gap(6),
+                        backgroundColor: Colors.white.withValues(alpha: 0.14),
+                        valueColor: const AlwaysStoppedAnimation<Color>(
+                          HjTheme.accent,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(height: m.gap(8)),
+                Text(
+                  '$v',
+                  style: TextStyle(
+                    fontSize: m.sp(10.5),
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+                SizedBox(height: m.gap(10)),
+              ],
+            ),
           ),
         ),
       ),
@@ -363,7 +572,7 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
             SizedBox(height: m.gap(16)),
             FilledButton(
               style: FilledButton.styleFrom(backgroundColor: HjTheme.accent),
-              onPressed: () => _load(_index, resume: false),
+              onPressed: _retry,
               child: const Text('重试'),
             ),
           ],
@@ -885,9 +1094,96 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
     );
   }
 
+  // ---------- 长按方向键 ----------
+
+  /// 长按右键：250ms 后进 2 倍速，松开还原。
+  ///
+  /// 短按（<250ms）走 [_seekBy]，长按期间不 seek，避免「先跳 15 秒再加速」的错手感。
+  void _holdSpeedStart() {
+    if (_speedBoost || _player == null) return;
+    _speedHoldTimer?.cancel();
+    _speedHoldTimer = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted || _player == null) return;
+      _rateBeforeBoost = _rate;
+      setState(() => _speedBoost = true);
+      unawaited(_player!.setRate(2.0));
+    });
+  }
+
+  /// 松开右键：进过倍速就还原（不 seek），没进过就当成短按跳 15 秒
+  void _holdSpeedEnd() {
+    final timer = _speedHoldTimer;
+    _speedHoldTimer = null;
+    timer?.cancel();
+    if (_speedBoost) {
+      setState(() => _speedBoost = false);
+      unawaited(_player?.setRate(_rateBeforeBoost) ?? Future<void>.value());
+      _wake();
+      return;
+    }
+    _seekBy(15);
+  }
+
+  /// 音量步进：每次 5%，长按期间每 140ms 一次
+  void _stepVolume(int delta) {
+    setState(() {
+      _volume = (_volume + delta).clamp(0, 100);
+      if (_muted && _volume > 0) _muted = false;
+      _volHudVisible = true;
+    });
+    unawaited(_player?.setVolume(_volume) ?? Future<void>.value());
+    _volHudTimer?.cancel();
+    _volHudTimer = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() => _volHudVisible = false);
+    });
+    _wake();
+  }
+
+  void _holdVolumeStart(int delta) {
+    _stepVolume(delta);
+    _volHoldTimer?.cancel();
+    _volHoldTimer = Timer.periodic(const Duration(milliseconds: 140), (_) {
+      if (!mounted) return;
+      _stepVolume(delta);
+    });
+  }
+
+  void _holdVolumeEnd() {
+    _volHoldTimer?.cancel();
+    _volHoldTimer = null;
+  }
+
+  void _seekBy(int seconds) {
+    _player?.seek(_position + Duration(seconds: seconds));
+    _wake();
+  }
+
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (event is KeyUpEvent) return KeyEventResult.ignored;
     final k = event.logicalKey;
+
+    // 松开：结束长按态
+    if (event is KeyUpEvent) {
+      if (k == LogicalKeyboardKey.arrowRight) {
+        _holdSpeedEnd();
+        return KeyEventResult.handled;
+      }
+      if (k == LogicalKeyboardKey.arrowUp ||
+          k == LogicalKeyboardKey.arrowDown) {
+        _holdVolumeEnd();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+
+    // 重复的 KeyDown（系统自动重复）不重复起计时器
+    if (event is KeyRepeatEvent) {
+      if (k == LogicalKeyboardKey.arrowRight ||
+          k == LogicalKeyboardKey.arrowUp ||
+          k == LogicalKeyboardKey.arrowDown) {
+        return KeyEventResult.handled;
+      }
+    }
+
     if (k == LogicalKeyboardKey.escape) {
       if (_panelOpen) {
         setState(() => _panelOpen = false);
@@ -901,25 +1197,19 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.arrowLeft) {
-      _player?.seek(_position - const Duration(seconds: 15));
-      _wake();
+      _seekBy(-15);
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.arrowRight) {
-      _player?.seek(_position + const Duration(seconds: 15));
-      _wake();
+      _holdSpeedStart();
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.arrowUp) {
-      setState(() => _volume = (_volume + 5).clamp(0, 100));
-      _player?.setVolume(_volume);
-      _wake();
+      _holdVolumeStart(5);
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.arrowDown) {
-      setState(() => _volume = (_volume - 5).clamp(0, 100));
-      _player?.setVolume(_volume);
-      _wake();
+      _holdVolumeStart(-5);
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.keyF) {
