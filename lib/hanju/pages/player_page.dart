@@ -1178,14 +1178,9 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
       return KeyEventResult.ignored;
     }
 
-    // 重复的 KeyDown（系统自动重复）不重复起计时器
-    if (event is KeyRepeatEvent) {
-      if (k == LogicalKeyboardKey.arrowRight ||
-          k == LogicalKeyboardKey.arrowUp ||
-          k == LogicalKeyboardKey.arrowDown) {
-        return KeyEventResult.handled;
-      }
-    }
+    // 系统自动重复的按键一律吞掉：长按的连续动作由我们自己的 Timer 负责，
+    // 否则长按空格会疯狂 toggle、长按 ← 会一次跳几十个 15 秒。
+    if (event is KeyRepeatEvent) return KeyEventResult.handled;
 
     if (k == LogicalKeyboardKey.escape) {
       if (_panelOpen) {
