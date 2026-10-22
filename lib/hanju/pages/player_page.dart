@@ -1100,8 +1100,10 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
   ///
   /// 短按（<250ms）走 [_seekBy]，长按期间不 seek，避免「先跳 15 秒再加速」的错手感。
   void _holdSpeedStart() {
-    if (_speedBoost || _player == null) return;
-    _speedHoldTimer?.cancel();
+    // 长按期间系统可能连发 KeyDownEvent（不只是 KeyRepeatEvent），
+    // 这里必须幂等：已有计时器就直接返回，否则每来一次重复键就把 250ms 重置，
+    // 倍速永远触发不了。
+    if (_speedBoost || _speedHoldTimer != null || _player == null) return;
     _speedHoldTimer = Timer(const Duration(milliseconds: 250), () {
       if (!mounted || _player == null) return;
       _rateBeforeBoost = _rate;
@@ -1140,8 +1142,9 @@ class _HjPlayerPageState extends State<HjPlayerPage> {
   }
 
   void _holdVolumeStart(int delta) {
+    // 同 _holdSpeedStart：重复 KeyDownEvent 不能让音量被重复扣加或重置计时器
+    if (_volHoldTimer != null) return;
     _stepVolume(delta);
-    _volHoldTimer?.cancel();
     _volHoldTimer = Timer.periodic(const Duration(milliseconds: 140), (_) {
       if (!mounted) return;
       _stepVolume(delta);
